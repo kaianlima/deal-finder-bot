@@ -23,6 +23,17 @@ pub fn get_currency(cell: &scraper::element_ref::Select) -> String {
     currency
 }
 
+pub fn get_attr_src_text(select: &mut scraper::element_ref::Select) -> String {
+    let element = select.next();
+    let mut src: String = String::new();
+    if let Some(e) = element {
+        if let Some(str) = e.value().attr("src") {
+            src = str.to_string();
+        }
+    }
+    src
+}
+
 pub fn search_in(games_searched: &GamesVec, text: &str) -> GameOpt {
     let index = games_searched.games.iter().position(|game| {
         game.name.to_lowercase() == text.to_lowercase()

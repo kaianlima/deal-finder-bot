@@ -17,6 +17,7 @@ pub struct Game {
     pub full_price: String,
     pub discounted_price: String,
     pub discount: String,
+    pub img_url: String,
 }
 
 #[derive(Clone, Debug)]

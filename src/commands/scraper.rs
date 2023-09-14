@@ -7,23 +7,25 @@ use tracing::info;
 use url::form_urlencoded::byte_serialize;
 
 use crate::Context;
-use crate::funcs::{get_currency, get_element_text, make_selector, search_in};
+use crate::funcs::{get_attr_src_text, get_currency, get_element_text, make_selector, search_in};
 use crate::structs::{Command, CommandResult, Error, Game, GameOpt, GamesVec};
 
 lazy_static! {
     static ref STEAM_RESULTS_SELECTOR: Selector = make_selector("div[id='search_resultsRows']");
-    static ref STEAM_ROW_GAME_SELECTOR: Selector = make_selector("a.search_result_row");
+    static ref STEAM_GAME_SELECTOR: Selector = make_selector("a.search_result_row");
     static ref STEAM_GAME_TITLE_SELECTOR: Selector = make_selector("span.title");
     static ref STEAM_GAME_FULL_PRICE_SELECTOR: Selector = make_selector("div.discount_original_price");
     static ref STEAM_GAME_DISCOUNTED_PRICE_SELECTOR: Selector = make_selector("div.discount_final_price");
     static ref STEAM_GAME_DISCOUNT_SELECTOR: Selector = make_selector("div.discount_pct");
+    static ref STEAM_GAME_IMG_URL_SELECTOR: Selector = make_selector("div.search_capsule > img");
 
     static ref EPIC_RESULTS_SELECTOR: Selector = make_selector("main section ul");
-    static ref EPIC_GAME_SELECTOR: Selector = make_selector("li > div > div > a > div > div > div:nth-child(2)");
-    static ref EPIC_GAME_TITLE_SELECTOR: Selector = make_selector("div:nth-child(2) > div > div");
-    static ref EPIC_GAME_FULL_PRICE_SELECTOR: Selector = make_selector("div:nth-child(3) > div > div:nth-child(2) > div > div:first-child > span > div");
-    static ref EPIC_GAME_DISCOUNTED_PRICE_SELECTOR: Selector = make_selector("div:nth-child(3) > div > div:nth-child(2) > div > div:nth-child(2) > span");
-    static ref EPIC_GAME_DISCOUNT_SELECTOR: Selector = make_selector("div:nth-child(3) > div > div:first-child > span > div");
+    static ref EPIC_GAME_SELECTOR: Selector = make_selector("li > div > div > a > div > div");
+    static ref EPIC_GAME_TITLE_SELECTOR: Selector = make_selector("div:nth-child(2) > div:nth-child(2) > div > div");
+    static ref EPIC_GAME_FULL_PRICE_SELECTOR: Selector = make_selector("div:nth-child(2) > div:nth-child(3) > div > div:nth-child(2) > div > div:first-child > span > div");
+    static ref EPIC_GAME_DISCOUNTED_PRICE_SELECTOR: Selector = make_selector("div:nth-child(2) > div:nth-child(3) > div > div:nth-child(2) > div > div:nth-child(2) > span");
+    static ref EPIC_GAME_DISCOUNT_SELECTOR: Selector = make_selector("div:nth-child(2) > div:nth-child(3) > div > div:first-child > span > div");
+    static ref EPIC_GAME_IMG_URL_SELECTOR: Selector = make_selector("div:first-child > div > div > div > div > img");
 
     static ref NUUVEM_RESULTS_SELECTOR: Selector = make_selector("div.products-items");
     static ref NUUVEM_GAME_SELECTOR: Selector = make_selector("div.product-card--grid a.product-card--wrapper");
@@ -32,6 +34,7 @@ lazy_static! {
     static ref NUUVEM_GAME_PRICE_INTEGER_SELECTOR: Selector = make_selector("span.integer");
     static ref NUUVEM_GAME_PRICE_DECIMAL_SELECTOR: Selector = make_selector("span.decimal");
     static ref NUUVEM_GAME_DISCOUNT_SELECTOR: Selector = make_selector("span.product-price--discount");
+    static ref NUUVEM_GAME_IMG_URL_SELECTOR: Selector = make_selector("div.product-img > img");
 }
 
 pub async fn get_game_steam(
@@ -66,13 +69,14 @@ pub async fn get_game_steam(
 
     let main_rows_result = document.select(&STEAM_RESULTS_SELECTOR);
     for main_rows in main_rows_result {
-        let game_rows = main_rows.select(&STEAM_ROW_GAME_SELECTOR);
+        let game_rows = main_rows.select(&STEAM_GAME_SELECTOR);
         for game_row in game_rows {
             let game_name = get_element_text(&game_row.select(&STEAM_GAME_TITLE_SELECTOR));
             let game_full_price = get_element_text(&game_row.select(&STEAM_GAME_FULL_PRICE_SELECTOR));
             let game_discounted_price = get_element_text(&game_row.select(&STEAM_GAME_DISCOUNTED_PRICE_SELECTOR));
             let game_discount = get_element_text(&game_row.select(&STEAM_GAME_DISCOUNT_SELECTOR));
             let game_currency = get_currency(&game_row.select(&STEAM_GAME_DISCOUNTED_PRICE_SELECTOR));
+            let game_img_url = get_attr_src_text(&mut game_row.select(&STEAM_GAME_IMG_URL_SELECTOR));
 
             if !game_discounted_price.is_empty() || !game_full_price.is_empty() {
                 let game: Game = Game {
@@ -82,6 +86,7 @@ pub async fn get_game_steam(
                     full_price: game_full_price,
                     discounted_price: game_discounted_price,
                     discount: if game_discount.is_empty() { "0%".to_string() } else { game_discount },
+                    img_url: game_img_url,
                 };
                 game_list.push(game);
             }
@@ -136,6 +141,7 @@ pub async fn get_game_epic(
             let game_discounted_price = get_element_text(&game_row.select(&EPIC_GAME_DISCOUNTED_PRICE_SELECTOR));
             let game_discount = get_element_text(&game_row.select(&EPIC_GAME_DISCOUNT_SELECTOR));
             let game_currency = get_currency(&game_row.select(&EPIC_GAME_DISCOUNTED_PRICE_SELECTOR));
+            let game_img_url = get_attr_src_text(&mut game_row.select(&EPIC_GAME_IMG_URL_SELECTOR));
 
             if !game_discounted_price.is_empty() || !game_full_price.is_empty() {
                 let game: Game = Game {
@@ -145,6 +151,7 @@ pub async fn get_game_epic(
                     full_price: game_full_price,
                     discounted_price: game_discounted_price,
                     discount: if game_discount.is_empty() { "0%".to_string() } else { game_discount },
+                    img_url: game_img_url,
                 };
                 game_list.push(game);
             }
@@ -197,6 +204,7 @@ pub async fn get_game_nuuvem(
             let game_price = get_element_text(&game_row.select(&NUUVEM_GAME_PRICE_INTEGER_SELECTOR)) + &get_element_text(&game_row.select(&NUUVEM_GAME_PRICE_DECIMAL_SELECTOR));
             let game_discount = get_element_text(&game_row.select(&NUUVEM_GAME_DISCOUNT_SELECTOR));
             let game_currency = get_currency(&game_row.select(&NUUVEM_GAME_CURRENCY_SELECTOR));
+            let game_img_url = get_attr_src_text(&mut game_row.select(&NUUVEM_GAME_IMG_URL_SELECTOR));
 
             if !game_price.is_empty() {
                 let game: Game = Game {
@@ -206,6 +214,7 @@ pub async fn get_game_nuuvem(
                     full_price: if game_discount.is_empty() { "R$0".to_string() } else { game_price.clone() },
                     discounted_price: if game_discount.is_empty() { "R$0".to_string() } else { game_price.clone() },
                     discount: if game_discount.is_empty() { "0%".to_string() } else { game_discount },
+                    img_url: game_img_url,
                 };
                 game_list.push(game);
             }
@@ -242,10 +251,13 @@ pub async fn deal(
 
     // Set game name for the first found in steam, or then nuuvem
     let mut game_name: String = game.clone();
+    let mut img_url: String = String::new();
     if !games_steam.games.is_empty() {
         game_name = games_steam.games.first().unwrap().name.clone();
+        img_url = games_steam.games.first().unwrap().img_url.clone()
     } else if !games_nuuvem.games.is_empty() {
         game_name = games_nuuvem.games.first().unwrap().name.clone();
+        img_url = games_nuuvem.games.first().unwrap().img_url.clone();
     }
 
     let game_steam_opt: GameOpt = search_in(&games_steam, &game_name);
@@ -264,6 +276,7 @@ pub async fn deal(
         builder
         .content("").embed(|e| {
             e.title(&game_name)
+            .image(img_url)
             .fields(fields_vec)
         })
     })
