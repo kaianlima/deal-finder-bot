@@ -1,3 +1,5 @@
+use reqwest::header::{HeaderMap, HeaderValue, COOKIE};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -7,7 +9,7 @@ use tracing::info;
 use url::form_urlencoded::byte_serialize;
 
 use crate::Context;
-use crate::funcs::{get_attr_src_text, get_currency, get_element_text, make_selector, search_in};
+use crate::funcs::{get_attr_text, get_currency, get_element_text, make_selector, search_in};
 use crate::structs::{Command, CommandResult, Error, Game, GameOpt, GamesVec};
 
 lazy_static! {
@@ -35,6 +37,14 @@ lazy_static! {
     static ref NUUVEM_GAME_PRICE_DECIMAL_SELECTOR: Selector = make_selector("span.decimal");
     static ref NUUVEM_GAME_DISCOUNT_SELECTOR: Selector = make_selector("span.product-price--discount");
     static ref NUUVEM_GAME_IMG_URL_SELECTOR: Selector = make_selector("div.product-img > img");
+
+    static ref GOG_RESULTS_SELECTOR: Selector = make_selector("div.paginated-products-grid");
+    static ref GOG_GAME_SELECTOR: Selector = make_selector("product-tile > a.product-tile");
+    static ref GOG_GAME_TITLE_SELECTOR: Selector = make_selector("div.product-tile__info > div.product-tile__title > product-title > span");
+    static ref GOG_GAME_FULL_PRICE_SELECTOR: Selector = make_selector("div.product-tile__info > div.product-tile__footer > div.product-tile__price-info > product-price > price-value > span.base-value");
+    static ref GOG_GAME_DISCOUNTED_PRICE_SELECTOR: Selector = make_selector("div.product-tile__info > div.product-tile__footer > div.product-tile__price-info > product-price > price-value > span.final-value");
+    static ref GOG_GAME_DISCOUNT_SELECTOR: Selector = make_selector("div.product-tile__info > div.product-tile__footer > div.product-tile__price-info > product-price > price-discount");
+    static ref GOG_GAME_IMG_URL_SELECTOR: Selector = make_selector("div.product-tile__image-wrapper > store-picture > picture > source:nth-child(2)");
 }
 
 pub async fn get_game_steam(
@@ -76,7 +86,7 @@ pub async fn get_game_steam(
             let game_discounted_price = get_element_text(&game_row.select(&STEAM_GAME_DISCOUNTED_PRICE_SELECTOR));
             let game_discount = get_element_text(&game_row.select(&STEAM_GAME_DISCOUNT_SELECTOR));
             let game_currency = get_currency(&game_row.select(&STEAM_GAME_DISCOUNTED_PRICE_SELECTOR));
-            let game_img_url = get_attr_src_text(&mut game_row.select(&STEAM_GAME_IMG_URL_SELECTOR));
+            let game_img_url = get_attr_text(&mut game_row.select(&STEAM_GAME_IMG_URL_SELECTOR), "src");
 
             if !game_discounted_price.is_empty() || !game_full_price.is_empty() {
                 let game: Game = Game {
@@ -141,7 +151,7 @@ pub async fn get_game_epic(
             let game_discounted_price = get_element_text(&game_row.select(&EPIC_GAME_DISCOUNTED_PRICE_SELECTOR));
             let game_discount = get_element_text(&game_row.select(&EPIC_GAME_DISCOUNT_SELECTOR));
             let game_currency = get_currency(&game_row.select(&EPIC_GAME_DISCOUNTED_PRICE_SELECTOR));
-            let game_img_url = get_attr_src_text(&mut game_row.select(&EPIC_GAME_IMG_URL_SELECTOR));
+            let game_img_url = get_attr_text(&mut game_row.select(&EPIC_GAME_IMG_URL_SELECTOR), "src");
 
             if !game_discounted_price.is_empty() || !game_full_price.is_empty() {
                 let game: Game = Game {
@@ -204,7 +214,7 @@ pub async fn get_game_nuuvem(
             let game_price = get_element_text(&game_row.select(&NUUVEM_GAME_PRICE_INTEGER_SELECTOR)) + &get_element_text(&game_row.select(&NUUVEM_GAME_PRICE_DECIMAL_SELECTOR));
             let game_discount = get_element_text(&game_row.select(&NUUVEM_GAME_DISCOUNT_SELECTOR));
             let game_currency = get_currency(&game_row.select(&NUUVEM_GAME_CURRENCY_SELECTOR));
-            let game_img_url = get_attr_src_text(&mut game_row.select(&NUUVEM_GAME_IMG_URL_SELECTOR));
+            let game_img_url = get_attr_text(&mut game_row.select(&NUUVEM_GAME_IMG_URL_SELECTOR), "src");
 
             if !game_price.is_empty() {
                 let game: Game = Game {
@@ -226,6 +236,71 @@ pub async fn get_game_nuuvem(
     Ok(game_list)
 }
 
+pub async fn get_game_gog(
+    client: Client,
+    game: String,
+) -> Result<Vec<Game>, Error> {
+	// API endpoint var
+    const GOG_URL: &str = "https://www.gog.com/en/games?query=";
+    const PARAMS: &str = "&order=desc:score";
+
+    let game_param_encoded: String = byte_serialize(game.as_bytes()).collect();
+    let url: String = format!("{}{}{}", &GOG_URL, &game_param_encoded, &PARAMS);
+
+    info!("GOG_URL call: {:#?}", url);
+
+    // Set cookies
+    let mut headers = HeaderMap::new();
+    headers.insert(COOKIE, HeaderValue::from_str("gog_lc=BR_BRL_en-US").unwrap());
+
+    let response_str: String = client.get(url)
+        .headers(headers)
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let document = Html::parse_document(&response_str);
+
+    let mut game_list: Vec<Game> = Vec::new(); 
+
+    let main_rows_result = document.select(&GOG_RESULTS_SELECTOR);
+    for main_rows in main_rows_result {
+        let game_rows = main_rows.select(&GOG_GAME_SELECTOR);
+        for game_row in game_rows {
+            let title_selector = &game_row.select(&GOG_GAME_TITLE_SELECTOR);
+            let title_counter = title_selector.clone().count();
+            let mut game_name = get_element_text(&title_selector);
+            if title_counter > 1 {
+                game_name = get_element_text(&title_selector.clone().dropping(title_counter - 1));
+            }
+            let game_full_price = get_element_text(&game_row.select(&GOG_GAME_FULL_PRICE_SELECTOR));
+            let game_discounted_price = get_element_text(&game_row.select(&GOG_GAME_DISCOUNTED_PRICE_SELECTOR));
+            let game_discount = get_element_text(&game_row.select(&GOG_GAME_DISCOUNT_SELECTOR));
+            let game_currency = get_currency(&game_row.select(&GOG_GAME_FULL_PRICE_SELECTOR));
+            let game_img_url = get_attr_text(&mut game_row.select(&GOG_GAME_IMG_URL_SELECTOR), "srcset");
+
+            if !game_discounted_price.is_empty() || !game_full_price.is_empty() {
+                let game: Game = Game {
+                    site: "GOG".to_string(),
+                    name: game_name,
+                    currency: game_currency,
+                    full_price: game_full_price,
+                    discounted_price: game_discounted_price,
+                    discount: if game_discount.is_empty() { "0%".to_string() } else { game_discount },
+                    img_url: game_img_url,
+                };
+                game_list.push(game);
+            }
+        }
+    }
+    
+    info!("GOG games: {:#?}", &game_list);
+    info!("GOG search found: {:#?}", &game_list.len());
+
+    Ok(game_list)
+}
+
 #[poise::command(prefix_command, slash_command, reuse_response, track_edits)]
 pub async fn deal(
     ctx: Context<'_>, 
@@ -234,7 +309,7 @@ pub async fn deal(
     let start = Instant::now();
     info!("Commands parameters: {{Game: {:#?}}}", &game);
 
-    let sites: Vec<&str> = vec!("Steam", "Epic Games", "Nuuvem");
+    let sites: Vec<&str> = vec!("Steam", "Epic Games", "Nuuvem", "GOG");
     let client: Client = ctx.data().0.reqwest.clone();
     let mut site_games: HashMap<&str, GameOpt> = HashMap::new();
 
@@ -248,6 +323,9 @@ pub async fn deal(
     let games_nuuvem: GamesVec = GamesVec {
         games: get_game_nuuvem(client.clone(), game.clone()).await?,
     };
+    let games_gog: GamesVec = GamesVec {
+        games: get_game_gog(client.clone(), game.clone()).await?,
+    };
 
     // Set game name for the first found in steam, or then nuuvem
     let mut game_name: String = game.clone();
@@ -258,12 +336,17 @@ pub async fn deal(
     } else if !games_nuuvem.games.is_empty() {
         game_name = games_nuuvem.games.first().unwrap().name.clone();
         img_url = games_nuuvem.games.first().unwrap().img_url.clone();
+    } else if !games_nuuvem.games.is_empty() {
+        game_name = games_gog.games.first().unwrap().name.clone();
+        img_url = games_gog.games.first().unwrap().img_url.clone();
     }
 
     let game_steam_opt: GameOpt = search_in(&games_steam, &game_name);
     let game_nuuvem_opt: GameOpt = search_in(&games_nuuvem, &game_name);
+    let game_gog_opt: GameOpt = search_in(&games_gog, &game_name);
     site_games.insert(sites[0], game_steam_opt);
     site_games.insert(sites[2], game_nuuvem_opt);
+    site_games.insert(sites[3], game_gog_opt);
 
     // Build response fields
     let mut fields_vec: Vec<(String, GameOpt, bool)> = Vec::default();
